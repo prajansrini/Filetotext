@@ -41,7 +41,12 @@ function toast(m,t='info',ms=2500){
 }
 
 // ─── Theme ──────────────────────────────────────────────────
-function setTheme(t){document.body.setAttribute('data-theme',t);localStorage.setItem('pixson-theme',t);}
+function setTheme(t) {
+  document.body.setAttribute('data-theme', t);
+  localStorage.setItem('pixson-theme', t);
+  const logo = document.getElementById('mainLogoImg');
+  if (logo) logo.src = (t === 'light') ? 'logol.png' : 'logop.png';
+}
 const sv=localStorage.getItem('pixson-theme');if(sv)setTheme(sv);
 themeBtn.onclick=()=>setTheme(document.body.getAttribute('data-theme')==='dark'?'light':'dark');
 
@@ -226,6 +231,75 @@ function base85ToU8(s) {
     for (let i = 0; i < c - 1; i++) u.push((a>>>(24-i*8))&255);
   }
   return new Uint8Array(u);
+}
+function drawQRCodeWithLogo(text, canvas) {
+  if (typeof qrcode === 'undefined') return;
+  try {
+    let errLvl = 'H';
+    if (text.length > 1100) errLvl = 'Q';
+    if (text.length > 1500) errLvl = 'M';
+    if (text.length > 2000) errLvl = 'L';
+    
+    const qr = qrcode(0, errLvl);
+    qr.addData(text);
+    qr.make();
+    const count = qr.getModuleCount(), cellSize = 6, margin = 4;
+    const size = (count * cellSize) + (margin * 2 * cellSize);
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    
+    // Background
+    ctx.fillStyle = '#ffffff'; 
+    ctx.fillRect(0, 0, size, size);
+    
+    ctx.fillStyle = '#000000';
+    const offset = margin * cellSize;
+    
+    const isMarker = (r, c) => (r <= 6 && c <= 6) || (r >= count - 7 && c <= 6) || (r <= 6 && c >= count - 7);
+
+    // Draw circular dots for all data modules
+    for (let r = 0; r < count; r++) {
+      for (let c = 0; c < count; c++) {
+        if (isMarker(r, c)) continue;
+        if (qr.isDark(r, c)) {
+          ctx.beginPath();
+          ctx.arc(offset + c * cellSize + cellSize/2, offset + r * cellSize + cellSize/2, (cellSize/2) * 0.85, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    // Draw the 3 rounded positioning eyes
+    const drawSingleEye = (startRow, startCol) => {
+      const cx = offset + startCol * cellSize + 3.5 * cellSize;
+      const cy = offset + startRow * cellSize + 3.5 * cellSize;
+      
+      const w7 = 7 * cellSize, r7 = 2.2 * cellSize;
+      ctx.beginPath();
+      if(ctx.roundRect) ctx.roundRect(cx - w7/2, cy - w7/2, w7, w7, r7);
+      else ctx.rect(cx - w7/2, cy - w7/2, w7, w7);
+      ctx.fill();
+      
+      const w5 = 5 * cellSize, r5 = 1.3 * cellSize;
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath();
+      if(ctx.roundRect) ctx.roundRect(cx - w5/2, cy - w5/2, w5, w5, r5);
+      else ctx.rect(cx - w5/2, cy - w5/2, w5, w5);
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+      
+      const w3 = 3 * cellSize, r3 = 0.8 * cellSize;
+      ctx.beginPath();
+      if(ctx.roundRect) ctx.roundRect(cx - w3/2, cy - w3/2, w3, w3, r3);
+      else ctx.rect(cx - w3/2, cy - w3/2, w3, w3);
+      ctx.fill();
+    };
+    
+    drawSingleEye(0, 0);           // Top Left
+    drawSingleEye(count - 7, 0);   // Bottom Left
+    drawSingleEye(0, count - 7);   // Top Right
+
+  } catch(e) { console.error("QR Error", e); }
 }
 
 function hexDump(u8, max=512) {
@@ -586,8 +660,10 @@ function makeImgRow(id,file,imgEl,dataUrl){
         '<span class="badge badge-enc js-eb"></span><span class="badge badge-size js-js"></span>'+
         '<button class="btn btn-sm btn-outline-cyan js-cp-html" title="Copy <img> tag">HTML</button>'+
         '<button class="btn btn-sm btn-outline-cyan js-cp-css" title="Copy background-image">CSS</button>'+
+        '<button class="btn btn-sm btn-outline-cyan js-qr-btn" title="Show QR Code" style="display:none">QR Code</button>'+
         '<button class="btn btn-sm btn-ghost js-cp">Copy</button><button class="btn btn-sm btn-accent js-dl">Download</button></div></div>'+
       '<pre class="json-preview js-jp"></pre>'+
+      '<canvas class="qr-canvas js-qr" style="display:none; width:100%; max-width:300px; margin: 20px auto 10px; border-radius:8px;"></canvas>'+
     '</div>';
 
   imgQueue.appendChild(row);
@@ -605,6 +681,12 @@ function makeImgRow(id,file,imgEl,dataUrl){
     thumbImg.style.cursor = 'zoom-in';
     thumbImg.onclick = () => openImagePreview(thumbImg.src);
   }
+  
+  const qrBtn = row.querySelector('.js-qr-btn'), qrCvs = row.querySelector('.js-qr'), jp = row.querySelector('.js-jp');
+  qrBtn.onclick = () => {
+    if (qrCvs.style.display === 'none') { qrCvs.style.display = 'block'; jp.style.display = 'none'; qrBtn.textContent = 'Hide QR Code'; }
+    else { qrCvs.style.display = 'none'; jp.style.display = 'block'; qrBtn.textContent = 'QR Code'; }
+  };
   
   row.querySelector('.js-cp').onclick=async()=>{
     if(!row._dlBlob)return;
@@ -708,8 +790,10 @@ function makeGenericRow(id,file,u8){
     '<div class="row-result" id="res-'+id+'">'+
       '<div class="row-result-header"><h4>Output Preview</h4><div class="card-actions">'+
         '<span class="badge badge-enc js-eb"></span><span class="badge badge-size js-js"></span>'+
+        '<button class="btn btn-sm btn-outline-cyan js-qr-btn" title="Show QR Code" style="display:none">QR Code</button>'+
         '<button class="btn btn-sm btn-ghost js-cp">Copy</button><button class="btn btn-sm btn-accent js-dl">Download</button></div></div>'+
       '<pre class="json-preview js-jp"></pre>'+
+      '<canvas class="qr-canvas js-qr" style="display:none; width:100%; max-width:300px; margin: 20px auto 10px; border-radius:8px;"></canvas>'+
     '</div>';
   imgQueue.appendChild(row);
   row._u8=u8;row._fn=file.name;row._mime=file.type||'application/octet-stream';row._jd=null;row._dlBlob=null;row._outFmt='json';row._blobUrl=url;
@@ -720,6 +804,13 @@ function makeGenericRow(id,file,u8){
     row.style.cssText='opacity:0;transform:translateY(-6px);transition:all .18s';
     setTimeout(()=>row.remove(),180);
   };
+  
+  const qrBtn = row.querySelector('.js-qr-btn'), qrCvs = row.querySelector('.js-qr'), jp = row.querySelector('.js-jp');
+  qrBtn.onclick = () => {
+    if (qrCvs.style.display === 'none') { qrCvs.style.display = 'block'; jp.style.display = 'none'; qrBtn.textContent = 'Hide QR Code'; }
+    else { qrCvs.style.display = 'none'; jp.style.display = 'block'; qrBtn.textContent = 'QR Code'; }
+  };
+  
   row.querySelector('.js-conv').onclick=()=>convertGenericRow(row,id);
   row.querySelector('.js-cp').onclick=async()=>{
     if(!row._dlBlob)return;
@@ -785,6 +876,22 @@ async function convertGenericRow(row,id){
   res.querySelector('.js-eb').textContent='GZIP+B64';
   res.querySelector('.js-js').textContent=fmtSz(displaySize);
   res.querySelector('.js-jp').textContent=previewStr;
+
+  const qrBtn = row.querySelector('.js-qr-btn'), qrCvs = row.querySelector('.js-qr'), jp = row.querySelector('.js-jp');
+  if (qrBtn) {
+    let txtData = '';
+    if (encTog || outFmt === 'json') txtData = JSON.stringify(row._jd);
+    else { const buf = await fileBlob.arrayBuffer(); txtData = u8ToB64(new Uint8Array(buf)); }
+    
+    if (txtData.length <= 2900) {
+      qrBtn.style.display = 'inline-block';
+      drawQRCodeWithLogo(txtData, qrCvs);
+      qrCvs.style.display = 'none'; jp.style.display = 'block'; qrBtn.textContent = 'QR Code';
+    } else {
+      qrBtn.style.display = 'none'; qrCvs.style.display = 'none'; jp.style.display = 'block';
+    }
+  }
+
   btn.disabled=false;btn.textContent='Encode';
   if(typeof updateBulkUI==='function') updateBulkUI();
   toast(fmtSz(row._u8.length)+' → '+fmtSz(displaySize)+' ('+((displaySize/row._u8.length)*100).toFixed(0)+'%)','success');
@@ -872,6 +979,21 @@ async function convertImgRow(row,id){
   res.querySelector('.js-eb').textContent=displayEnc;
   res.querySelector('.js-js').textContent=fmtSz(displaySize);
   res.querySelector('.js-jp').textContent=previewStr;
+
+  const qrBtn = row.querySelector('.js-qr-btn'), qrCvs = row.querySelector('.js-qr'), jp = row.querySelector('.js-jp');
+  if (qrBtn) {
+    let txtData = '';
+    if (encTog || outFmt === 'json') txtData = JSON.stringify(row._jd);
+    else { const buf = await fileBlob.arrayBuffer(); txtData = u8ToB64(new Uint8Array(buf)); }
+    
+    if (txtData.length <= 2900) {
+      qrBtn.style.display = 'inline-block';
+      drawQRCodeWithLogo(txtData, qrCvs);
+      qrCvs.style.display = 'none'; jp.style.display = 'block'; qrBtn.textContent = 'QR Code';
+    } else {
+      qrBtn.style.display = 'none'; qrCvs.style.display = 'none'; jp.style.display = 'block';
+    }
+  }
 
   btn.disabled=false;btn.textContent='Convert';
   hideProgress(row);
