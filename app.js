@@ -749,7 +749,7 @@ async function convertImgRow(row,id){
 }
 
 // Drop/click/paste
-imgDrop.onclick=()=>imgInput.click();
+imgDrop.onclick=e=>{if(e.target.closest('.row-card')||e.target.closest('.bulk-actions-bar'))return;imgInput.click();};
 imgInput.onchange=e=>{if(e.target.files.length)addFiles(e.target.files);imgInput.value='';};
 imgDrop.ondragover=e=>{e.preventDefault();imgDrop.classList.add('drag-over');};
 imgDrop.ondragleave=()=>imgDrop.classList.remove('drag-over');
@@ -1019,7 +1019,7 @@ async function reconRow(row,id){
 }
 
 // Drop/click for Data
-jsonDrop.onclick=()=>jsonInput.click();
+jsonDrop.onclick=e=>{if(e.target.closest('.row-card')||e.target.closest('.bulk-actions-bar'))return;jsonInput.click();};
 jsonInput.onchange=e=>{if(e.target.files.length)addDataFiles(e.target.files);jsonInput.value='';};
 jsonDrop.ondragover=e=>{e.preventDefault();jsonDrop.classList.add('drag-over');};
 jsonDrop.ondragleave=()=>jsonDrop.classList.remove('drag-over');
@@ -1107,7 +1107,7 @@ $('#btnClearAllDecode').onclick = () => { jsonQueue.innerHTML = ''; };
 $('#btnProcessAllEncode').onclick = async () => {
   const btn=$('#btnProcessAllEncode'); btn.disabled=true; btn.textContent='Processing...';
   for (const row of Array.from(imgQueue.querySelectorAll('.row-card'))) {
-    if (!row._dlBlob) { if(row.id.startsWith('ir-')) await convertGenericRow(row, row.id.replace('ir-','')); else await convertImgRow(row, row.id.replace('im-','')); }
+    if (!row._dlBlob) { if(row._u8) await convertGenericRow(row, row.id.replace('ir-','')); else await convertImgRow(row, row.id.replace('ir-','')); }
   }
   btn.disabled=false; btn.textContent='Encode All';
 };
