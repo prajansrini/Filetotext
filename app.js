@@ -360,10 +360,13 @@
   // ─── Logo Interactive Physics Rotation ──────────────────────
   const logoIcon = document.querySelector('.logo-icon');
   if (logoIcon) {
-    let curRot = 0, velocity = 0.3, idleSpeed = 0.3, friction = 0.96;
+    let curRot = 0, velocity = 0, friction = 0.95;
+    let idleSpeed = 0.5;
     let isDrag = false, lastX = 0, lastTime = 0;
 
+    logoIcon.setAttribute('draggable', 'false');
     logoIcon.onmousedown = (e) => {
+      e.preventDefault();
       isDrag = true; lastX = e.clientX; lastTime = performance.now();
       logoIcon.style.transition = 'none';
     };
@@ -372,19 +375,22 @@
       if (!isDrag) return;
       const now = performance.now(), dt = now - lastTime;
       if (dt > 0) {
-        let v = ((e.clientX - lastX) / dt) * 6;
-        if (v > 60) v = 60; else if (v < -60) v = -60;
+        let v = ((e.clientX - lastX) / dt) * 15;
+        if (v > 150) v = 150; else if (v < -150) v = -150;
         velocity = v;
       }
       lastX = e.clientX; lastTime = now;
     });
 
-    window.addEventListener('mouseup', () => { isDrag = false; });
+    window.addEventListener('mouseup', () => {
+      isDrag = false;
+      if (Math.abs(velocity) > 1) idleSpeed = velocity > 0 ? 0.5 : -0.5;
+    });
 
     logoIcon.addEventListener('wheel', (e) => {
       e.preventDefault();
       velocity += (e.deltaY > 0 ? 8 : -8);
-      if (velocity > 60) velocity = 60; else if (velocity < -60) velocity = -60;
+      if (velocity > 150) velocity = 150; else if (velocity < -150) velocity = -150;
     });
 
     function spinLoop() {
@@ -497,18 +503,21 @@
     const isCtrl = e.ctrlKey || e.metaKey || isTouch;
     if (isShift) window.getSelection().removeAllRanges();
     
-    if (isShift && lastSelectedRow && lastSelectedRow.parentElement === row.parentElement) {
+    const queueEl = row.closest('#imageQueue, #jsonQueue');
+    if (isShift && lastSelectedRow && lastSelectedRow.closest('#imageQueue, #jsonQueue') === queueEl) {
       if (!isCtrl) {
         document.querySelectorAll('.row-card.selected').forEach(r => r.classList.remove('selected'));
         lastSelectedRow.classList.add('selected');
       }
-      const rows = Array.from(row.parentElement.children).filter(el => el.classList.contains('row-card'));
+      const rows = Array.from(queueEl.querySelectorAll('.row-card'));
       const i1 = rows.indexOf(lastSelectedRow);
       const i2 = rows.indexOf(row);
-      const start = Math.min(i1, i2);
-      const end = Math.max(i1, i2);
-      for (let i = start; i <= end; i++) {
-        rows[i].classList.add('selected');
+      if (i1 !== -1 && i2 !== -1) {
+        const start = Math.min(i1, i2);
+        const end = Math.max(i1, i2);
+        for (let i = start; i <= end; i++) {
+          rows[i].classList.add('selected');
+        }
       }
     } else if (isCtrl) {
       row.classList.toggle('selected');
@@ -520,6 +529,11 @@
     }
     updateSelectionMenu();
   }
+  document.addEventListener('mousedown', e => {
+    if (e.shiftKey && e.target.closest('.row-card')) {
+      e.preventDefault();
+    }
+  });
 
   document.addEventListener('click', e => {
     if (e.target.closest('.row-card') || e.target.closest('.selection-menu')) return;
