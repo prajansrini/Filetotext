@@ -33,8 +33,7 @@ const FLAG = { ENCRYPTED: 0x01, HAS_THUMB: 0x02 };
 
 // Your existing image MIME types that go through the canvas path
 const IMAGE_MIMES = new Set([
-  "image/png", "image/jpeg", "image/gif",
-  "image/webp", "image/bmp", "image/svg+xml",
+  "image/png", "image/jpeg", "image/jpg", "image/webp"
 ]);
 
 // ─────────────────────────────────────────────────────────────────────────────

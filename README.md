@@ -85,8 +85,8 @@ pixson/
 ### Encode Tab — Input
 | Category | Handling |
 |----------|----------|
-| **Images** (PNG, JPG, SVG, WebP) | Pixel-level encoding (Canvas extraction) with 7 specific schemes |
-| **Documents, Audio, Video, Archives** | Binary payload extraction → CompressionStream → Base64 serialization |
+| **Images** (PNG, JPG, JPEG, WebP) | Pixel-level encoding (Canvas extraction) with 7 specific schemes |
+| **Generic Files** (SVG, GIF, BMP, PDFs, ZIPs, etc.) | Binary payload extraction → GZip/Base64/Base85 encoding |
 
 ### Decode Tab — Input
 | Format | Detection |

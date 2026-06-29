@@ -120,18 +120,27 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       };
     });
   }
-  function saveFileToDB(storeName, id, file) { if (db) db.transaction(storeName, 'readwrite').objectStore(storeName).put({ id: Number(id), file, name: file.name, type: file.type, size: file.size }); }
+  function saveFileToDB(storeName, id, file) { if (db) db.transaction(storeName, 'readwrite').objectStore(storeName).put({ id: Number(id), file, name: file.name, type: file.type, size: file.size, batchId: file._batchId }); }
   function removeFileFromDB(storeName, id) { if (db) { try { db.transaction(storeName, 'readwrite').objectStore(storeName).delete(Number(id)); } catch (e) { console.error(e); } } }
   function clearDBStore(storeName) { if (db) db.transaction(storeName, 'readwrite').objectStore(storeName).clear(); }
   function loadWorkspace() {
     if (!db) return;
     const txEnc = db.transaction('encodeFiles', 'readonly');
     txEnc.objectStore('encodeFiles').getAll().onsuccess = (e) => {
-      for (const rec of e.target.result) { imgCtr = Math.max(imgCtr, rec.id); if (rec.type.startsWith('image/')) addImg(rec.file, true, rec.id); else addGenericFile(rec.file, true, rec.id); }
+      for (const rec of e.target.result) { 
+        imgCtr = Math.max(imgCtr, rec.id); 
+        if (rec.batchId) { try { rec.file._batchId = rec.batchId; } catch(err){} }
+        if (rec.type.startsWith('image/')) addImg(rec.file, true, rec.id); 
+        else addGenericFile(rec.file, true, rec.id); 
+      }
     };
     const txDec = db.transaction('decodeFiles', 'readonly');
     txDec.objectStore('decodeFiles').getAll().onsuccess = (e) => {
-      for (const rec of e.target.result) { jsonCtr = Math.max(jsonCtr, rec.id); addDataFile(rec.file, true, rec.id); }
+      for (const rec of e.target.result) { 
+        jsonCtr = Math.max(jsonCtr, rec.id); 
+        if (rec.batchId) { try { rec.file._batchId = rec.batchId; } catch(err){} }
+        addDataFile(rec.file, true, rec.id); 
+      }
     };
   }
   initDB().then(loadWorkspace).catch(e => console.warn('Workspace auto-save unavailable:', e));
@@ -221,9 +230,73 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 
   // ─── Helpers ────────────────────────────────────────────────
   function fmtSz(b) { if (b < 1024) return b + ' B'; if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'; return (b / 1048576).toFixed(2) + ' MB'; }
+  const getTime = (ts) => new Date(ts || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
   function dlBlob(b, n) { const u = URL.createObjectURL(b), a = document.createElement('a'); a.href = u; a.download = n; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5e3); }
   function c2h(c) { return c.toString(16).padStart(2, '0'); }
+  async function copyTextToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (e) { console.warn(e); }
+    }
+    try {
+      const ta = document.createElement('textarea'); ta.value = text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      const res = document.execCommand('copy'); ta.remove();
+      if (!res) throw new Error('exec fails');
+      return true;
+    } catch (e) { console.warn(e); return false; }
+  }
+  function getMasterContainer(queueEl, batchId) {
+    if (!batchId) return queueEl;
+    let master = document.getElementById('batch-' + batchId);
+    if (!master) {
+      const batchIndex = queueEl.querySelectorAll('.master-tile').length + 1;
+      const isEncode = queueEl.id === 'imageQueue';
+      master = document.createElement('div');
+      master.id = 'batch-' + batchId;
+      master.className = 'master-tile';
+      master.style.cssText = 'background:var(--bg-card);border:1px dashed var(--border);border-radius:14px;padding:12px;box-shadow:var(--shadow);margin-bottom:14px;position:relative;animation:rowIn .25s ease';
+      
+      const buttonsHtml = isEncode ? `
+        <button class="btn btn-sm btn-primary js-batch-enc">Encode...</button>
+        <button class="btn btn-sm btn-accent js-batch-dl">Download (ZIP)...</button>
+        <button class="btn btn-sm btn-accent js-batch-bun">Bundle into 1 File...</button>
+        <button class="btn btn-sm btn-ghost js-batch-clr">Clear</button>
+      ` : `
+        <button class="btn btn-sm btn-primary js-batch-dec">Decode...</button>
+        <button class="btn btn-sm btn-accent js-batch-dl">Download (ZIP)...</button>
+        <button class="btn btn-sm btn-ghost js-batch-clr">Clear</button>
+      `;
+
+      master.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border);">
+          <div style="font-weight:600;color:var(--text-1);font-size:1rem;display:flex;align-items:center;gap:8px;">
+            📁 Batch Upload ${batchIndex} <span style="color:var(--text-3);font-size:0.85rem;font-weight:500;margin-left:4px;">${getTime(batchId)}</span>
+          </div>
+          <div class="batch-actions" style="display:flex;gap:6px;">${buttonsHtml}</div>
+        </div>
+        <div class="master-items" style="display:flex;flex-direction:column;gap:14px;"></div>
+      `;
+      
+      queueEl.prepend(master);
+      
+      if (isEncode) {
+        master.querySelector('.js-batch-enc').onclick = () => openBatchModal('encode', true, batchId);
+        master.querySelector('.js-batch-dl').onclick = () => openBatchModal('download', true, batchId);
+        master.querySelector('.js-batch-bun').onclick = () => openBatchModal('bundle', true, batchId);
+      } else {
+        master.querySelector('.js-batch-dec').onclick = () => openBatchModal('encode', false, batchId);
+        master.querySelector('.js-batch-dl').onclick = () => openBatchModal('download', false, batchId);
+      }
+      master.querySelector('.js-batch-clr').onclick = () => {
+        master.querySelectorAll('.js-rm').forEach(btn => btn.click());
+        master.style.opacity = '0';
+        setTimeout(() => master.remove(), 250);
+      };
+    }
+    return master.querySelector('.master-items');
+  }
   function rgbHex(r, g, b) { return c2h(r) + c2h(g) + c2h(b); }
   function rgbInt(r, g, b) { return (r << 16) | (g << 8) | b; }
   function showProgress(row) { const p = row.querySelector('.row-progress'); if (p) p.classList.add('active'); }
@@ -785,12 +858,15 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   //  ENCODE — Universal File Router
   // ══════════════════════════════════════════════════════════════
 
-  const FILE_ICONS = { pdf: '📄', doc: '📝', docx: '📝', ppt: '📊', pptx: '📊', xls: '📗', xlsx: '📗', csv: '📋', mp3: '🎵', wav: '🎵', mp4: '🎬', mov: '🎬', zip: '📦', rar: '📦', txt: '📃', json: '📃', html: '🌐', css: '🎨', js: '⚙️', png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️', svg: '🖼️', ico: '🖼️' };
+  const FILE_ICONS = { pdf: '📄', doc: '📝', docx: '📝', ppt: '📊', pptx: '📊', xls: '📗', xlsx: '📗', csv: '📋', mp3: '🎵', wav: '🎵', mp4: '🎬', mov: '🎬', zip: '📦', rar: '📦', txt: '📃', json: '📃', html: '🌐', css: '🎨', js: '⚙️', png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🎞️', webp: '🖼️', svg: '📐', bmp: '🎨', ico: '🖼️' };
   function getFileIcon(name) { const ext = name.split('.').pop().toLowerCase(); return FILE_ICONS[ext] || '📎'; }
 
   function addFiles(files) {
+    const genericImages = new Set(['image/gif', 'image/svg+xml', 'image/bmp']);
+    const batchId = files.length > 1 ? Date.now() : null;
     for (const f of files) {
-      if (f.type.startsWith('image/')) addImg(f);
+      if (batchId) { try { f._batchId = batchId; } catch(e){} }
+      if (f.type.startsWith('image/') && !genericImages.has(f.type)) addImg(f);
       else addGenericFile(f);
     }
   }
@@ -807,7 +883,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     const id = ++imgCtr, file = new File([blob], 'pasted-' + id + '.png', { type: blob.type });
     saveFileToDB('encodeFiles', id, file);
     const reader = new FileReader();
-    reader.onload = e => { const img = new Image(); img.onload = () => makeImgRow(id, { name: file.name, size: file.size, type: file.type }, img, e.target.result); img.src = e.target.result; };
+    reader.onload = e => { const img = new Image(); img.onload = () => makeImgRow(id, file, img, e.target.result); img.src = e.target.result; };
     reader.readAsDataURL(blob);
   }
 
@@ -818,7 +894,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       '<div class="row-top">' +
       '<div class="row-thumb" style="display:flex;align-items:center;justify-content:center;font-size:2rem;background:var(--bg-input)">' + getFileIcon(file.name) + '</div>' +
       '<div class="row-info"><div class="row-name" title="' + file.name + '">' + file.name + '</div>' +
-      '<div class="row-meta"><span class="badge badge-enc">' + file.name.split('.').pop().toUpperCase() + '</span><span class="badge badge-dim">' + w + ' × ' + h + '</span><span class="badge badge-size">' + fmtSz(file.size) + '</span></div></div>' +
+      '<div class="row-meta"><span class="badge badge-enc">' + file.name.split('.').pop().toUpperCase() + '</span><span class="badge badge-dim">' + w + ' × ' + h + '</span><span class="badge badge-size">' + fmtSz(file.size) + '</span><span style="color:var(--text-3);font-size:0.75rem;font-weight:500;margin-left:8px">' + getTime(file._batchId || file.lastModified) + '</span></div></div>' +
       '<div class="row-actions"><button class="btn btn-sm btn-primary js-conv">Encode</button><button class="btn-remove js-rm">✕</button></div>' +
       '</div>' +
       '<div class="row-options" style="border-bottom:1px solid var(--border)">' +
@@ -826,7 +902,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       '<div class="option-group"><label class="option-label">Max Dimensions</label><input type="number" class="option-input js-maxdim" value="256" min="1" max="4096" disabled></div>' +
       '</div>' +
       '<div class="row-options">' +
-      '<div class="option-group"><label class="option-label">Container</label><select class="option-select js-fmt"><option value="json">JSON Text (.json)</option><option value="gz">GZipped JSON (.json.gz)</option><option value="pxsn2" selected>PXSN v2bin</option></select></div>' +
+      '<div class="option-group"><label class="option-label">Container</label><select class="option-select js-fmt"><option value="json">JSON Text (.json)</option><option value="gz">GZipped JSON (.json.gz)</option><option value="pxsn2" selected>PXSN Binary (.pxsn)</option></select></div>' +
       '<div class="option-group"><label class="option-label">Encoding</label><select class="option-select js-enc">' + encOptHTML() + '</select></div>' +
       '<div class="option-group"><label class="option-label">Encrypt</label><label class="toggle-switch"><input type="checkbox" class="js-enc-tog"><span class="toggle-slider"></span></label></div>' +
       '<div class="option-group"><label class="option-label">Password</label><input type="password" class="option-input js-enc-pass" placeholder="Secret..." disabled></div>' +
@@ -851,7 +927,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       '<canvas class="qr-canvas js-qr" style="display:none; width:100%; max-width:300px; margin: 20px auto 10px; border-radius:8px;"></canvas>' +
       '</div>';
 
-    imgQueue.appendChild(row);
+    getMasterContainer(imgQueue, file._batchId).prepend(row);
     row._img = imgEl; row._fn = file.name; row._origFile = file; row._jd = null;
 
     const origTog = row.querySelector('.js-orig'), maxIn = row.querySelector('.js-maxdim'), encTog = row.querySelector('.js-enc-tog'), encPass = row.querySelector('.js-enc-pass'), convBtn = row.querySelector('.js-conv');
@@ -897,8 +973,9 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
           const buf = await row._dlBlob.arrayBuffer();
           text = u8ToB64(new Uint8Array(buf));
         }
-        await navigator.clipboard.writeText(text);
-        toast(row._outFmt === 'json' ? 'Copied JSON!' : 'Copied as Base64!', 'success');
+        const ok = await copyTextToClipboard(text);
+        if (ok) toast(row._outFmt === 'json' ? 'Copied JSON!' : 'Copied as Base64!', 'success');
+        else throw new Error();
       } catch { toast('Copy failed', 'error'); }
     };
 
@@ -921,9 +998,10 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       try {
         const b64 = await getWebpB64();
         const html = `<img src="data:image/webp;base64,${b64}" width="${row._jd.width}" height="${row._jd.height}" alt="${row._fn}">`;
-        await navigator.clipboard.writeText(html);
-        toast('Copied HTML <img> tag!', 'success');
-      } catch (e) { toast(e.message, 'error'); }
+        const ok = await copyTextToClipboard(html);
+        if (ok) toast('Copied HTML <img> tag!', 'success');
+        else throw new Error('Copy failed');
+      } catch (e) { toast(e.message || 'Copy failed', 'error'); }
     };
     row.querySelector('.js-cp-css').onclick = async () => {
       if (row._lastState && row._lastState !== getImgRowState(row)) {
@@ -933,9 +1011,10 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       try {
         const b64 = await getWebpB64();
         const css = `background-image: url('data:image/webp;base64,${b64}');\nbackground-size: contain;\nbackground-repeat: no-repeat;`;
-        await navigator.clipboard.writeText(css);
-        toast('Copied CSS snippet!', 'success');
-      } catch (e) { toast(e.message, 'error'); }
+        const ok = await copyTextToClipboard(css);
+        if (ok) toast('Copied CSS snippet!', 'success');
+        else throw new Error('Copy failed');
+      } catch (e) { toast(e.message || 'Copy failed', 'error'); }
     };
 
     row.querySelector('.js-dl').onclick = async () => {
@@ -998,11 +1077,11 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       '<div class="row-top">' +
       '<div class="row-thumb" style="display:flex;align-items:center;justify-content:center;font-size:2rem;background:var(--bg-input)">' + icon + '</div>' +
       '<div class="row-info"><div class="row-name" title="' + file.name + '">' + file.name + '</div>' +
-      '<div class="row-meta"><span class="badge badge-enc">' + file.name.split('.').pop().toUpperCase() + '</span><span class="badge badge-size">' + fmtSz(file.size) + '</span></div></div>' +
+      '<div class="row-meta"><span class="badge badge-enc">' + file.name.split('.').pop().toUpperCase() + '</span><span class="badge badge-size">' + fmtSz(file.size) + '</span><span style="color:var(--text-3);font-size:0.75rem;font-weight:500;margin-left:8px">' + getTime(file._batchId || file.lastModified) + '</span></div></div>' +
       '<div class="row-actions"><button class="btn btn-sm btn-primary js-conv">Encode</button><button class="btn-remove js-rm">✕</button></div>' +
       '</div>' +
       '<div class="row-options" style="border-bottom:1px solid var(--border)">' +
-      '<div class="option-group"><label class="option-label">Container</label><select class="option-select js-fmt"><option value="json">JSON Text (.json)</option><option value="gz">GZipped JSON (.json.gz)</option><option selected value="pxsn2">PXSN v2bin</option></select></div>' +
+      '<div class="option-group"><label class="option-label">Container</label><select class="option-select js-fmt"><option value="json">JSON Text (.json)</option><option value="gz">GZipped JSON (.json.gz)</option><option selected value="pxsn2">PXSN Binary (.pxsn)</option></select></div>' +
       '<div class="option-group js-enc-group"><label class="option-label">Encoding</label><select class="option-select js-enc"></select></div>' +
       '<div class="option-group"><label class="option-label">Encrypt</label><label class="toggle-switch"><input type="checkbox" class="js-enc-tog"><span class="toggle-slider"></span></label></div>' +
       '<div class="option-group"><label class="option-label">Password</label><input type="password" class="option-input js-enc-pass" placeholder="Secret..." disabled></div>' +
@@ -1022,7 +1101,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       '<pre class="json-preview js-jp"></pre>' +
       '<canvas class="qr-canvas js-qr" style="display:none; width:100%; max-width:300px; margin: 20px auto 10px; border-radius:8px;"></canvas>' +
       '</div>';
-    imgQueue.appendChild(row);
+    getMasterContainer(imgQueue, file._batchId).prepend(row);
     row._u8 = u8; row._fn = file.name; row._mime = file.type || 'application/octet-stream'; row._origFile = file; row._jd = null; row._dlBlob = null; row._outFmt = 'json'; row._blobUrl = url;
     const encTog = row.querySelector('.js-enc-tog'), encPass = row.querySelector('.js-enc-pass'), convBtn = row.querySelector('.js-conv');
     encTog.onchange = () => { encPass.disabled = !encTog.checked; if (encTog.checked) encPass.focus(); };
@@ -1065,7 +1144,9 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
         let text;
         if (row._outFmt === 'json') text = JSON.stringify(row._jd, null, 2);
         else { const buf = await row._dlBlob.arrayBuffer(); text = u8ToB64(new Uint8Array(buf)); }
-        await navigator.clipboard.writeText(text); toast('Copied!', 'success');
+        const ok = await copyTextToClipboard(text);
+        if (ok) toast('Copied!', 'success');
+        else throw new Error();
       } catch { toast('Copy failed', 'error'); }
     };
     row.querySelector('.js-dl').onclick = async () => {
@@ -1216,8 +1297,9 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     let fileBlob, fileExt, displaySize, displayEnc = enc, previewStr;
 
     if (outFmt === 'pxsn2') {
-      const origFile = row._origFile || new File([await fetch(imgEl.src).then(r => r.blob())], row._fn, { type: 'image/png' });
-      const bin = await window.PXSN2.encodeToPXSN(origFile, { imageEncoding: enc, encrypt: row.querySelector('.js-enc-tog').checked });
+      const blob = await new Promise(r => cvs.toBlob(r, row._origFile?.type || 'image/png', 1.0));
+      const pxsnFile = new File([blob], row._fn, { type: row._origFile?.type || 'image/png' });
+      const bin = await window.PXSN2.encodeToPXSN(pxsnFile, { imageEncoding: enc, encrypt: row.querySelector('.js-enc-tog').checked });
       fileBlob = new Blob([bin], { type: 'application/octet-stream' });
       fileExt = 'pxsn';
       displaySize = bin.length;
@@ -1318,19 +1400,23 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   }
 
 
-  async function processDataBuffer(u8, name, id, sizeOverride) {
+  async function processDataBuffer(u8, name, id, sizeOverride, uploadTime, batchId) {
     try {
       const file = new File([u8], name, { type: 'application/octet-stream' });
       const result = await window.PXSN2.detectAndDecode(file);
       const sizeStr = fmtSz(sizeOverride || u8.length);
 
+      const baseId = id || ++jsonCtr;
+      let i = 0;
+      const bundleBatchId = result.files.length > 1 ? (batchId || Date.now()) : batchId;
       for (const item of result.files) {
+        const uniqueId = result.files.length > 1 ? `${baseId}_${i++}` : baseId;
         if (item._legacyImageJSON) {
-          makeDataRow(id || ++jsonCtr, item._legacyImageJSON.filename || name, sizeStr, item._legacyImageJSON, item._legacyImageJSON.encoding || 'hex');
+          makeDataRow(uniqueId, item._legacyImageJSON.filename || name, sizeStr, item._legacyImageJSON, item._legacyImageJSON.encoding || 'hex', uploadTime, bundleBatchId);
         } else if (item._legacyEncryptedJSON) {
-          makeEncryptedDecodeRow(id || ++jsonCtr, item._legacyEncryptedJSON.originalName || name, sizeStr, item._legacyEncryptedJSON);
+          makeEncryptedDecodeRow(uniqueId, item._legacyEncryptedJSON.originalName || name, sizeStr, item._legacyEncryptedJSON, uploadTime, bundleBatchId);
         } else {
-          makeGenericDecodeRow(id || ++jsonCtr, item.filename || name, sizeStr, {
+          makeGenericDecodeRow(uniqueId, item.filename || name, sizeStr, {
             filename: item.filename,
             mimeType: item.mimeType,
             originalSize: item.data.length,
@@ -1339,15 +1425,32 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
             _isPreDecoded: true,
             blob: item.blob,
             url: item.url
-          });
+          }, uploadTime, bundleBatchId);
         }
+      }
+      
+      if (result.files.length > 1) {
+        setTimeout(() => {
+          const master = getMasterContainer(jsonQueue, bundleBatchId);
+          if (master) {
+            master.querySelectorAll('.js-recon').forEach(btn => {
+              if (!btn.disabled) btn.click();
+            });
+          }
+        }, 150);
       }
     } catch (e) {
       toast('Error parsing file: ' + e.message, 'error');
     }
   }
 
-  function addDataFiles(files) { for (const f of files) addDataFile(f); }
+  function addDataFiles(files) {
+    const batchId = files.length > 1 ? Date.now() : null;
+    for (const f of files) {
+      if (batchId) { try { f._batchId = batchId; } catch(e){} }
+      addDataFile(f);
+    }
+  }
 
   function addDataFile(file, isRestore = false, restoreId = null) {
     const id = restoreId || ++jsonCtr;
@@ -1355,7 +1458,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     const reader = new FileReader();
     reader.onload = async e => {
       try {
-        await processDataBuffer(new Uint8Array(e.target.result), file.name, id, file.size);
+        await processDataBuffer(new Uint8Array(e.target.result), file.name, id, file.size, file.lastModified, file._batchId);
       } catch (err) { toast('Error reading file: ' + err.message, 'error'); }
     };
     reader.readAsArrayBuffer(file);
@@ -1364,21 +1467,21 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   async function addJsonFromText(text, name) {
     const id = ++jsonCtr;
     const u8 = new TextEncoder().encode(text);
-    await processDataBuffer(u8, name || 'pasted-data-' + id, id);
+    await processDataBuffer(u8, name || 'pasted-data-' + id, id, null, Date.now());
   }
 
-  function makeDataRow(id, name, sizeStr, obj, encBadge) {
+  function makeDataRow(id, name, sizeStr, obj, encBadge, uploadTime, batchId) {
     if (!obj.width || !obj.height) { toast(name + ': missing width/height', 'error'); return; }
     const row = document.createElement('div'); row.className = 'row-card'; row.id = 'jr-' + id;
     row.innerHTML =
       '<div class="row-top">' +
-      '<input type="checkbox" class="js-row-sel" style="width:18px;height:18px;cursor:pointer;accent-color:var(--accent);margin:0 15px 0 5px;">' +
       '<div class="row-thumb" id="jthumb-' + id + '"><canvas width="1" height="1"></canvas></div>' +
       '<div class="row-info"><div class="row-name" title="' + name + '">' + name + '</div>' +
-      '<div class="row-meta"><span class="badge badge-dim">' + obj.width + ' × ' + obj.height + '</span><span class="badge badge-size">' + sizeStr + '</span><span class="badge badge-enc">' + encBadge + '</span></div></div>' +
+      '<div class="row-meta"><span class="badge badge-dim">' + obj.width + ' × ' + obj.height + '</span><span class="badge badge-size">' + sizeStr + '</span><span class="badge badge-enc">' + encBadge + '</span><span style="color:var(--text-3);font-size:0.75rem;font-weight:500;margin-left:8px">' + getTime(batchId || uploadTime) + '</span></div></div>' +
       '<div class="row-actions"><button class="btn btn-sm btn-primary js-recon">Decode</button>' +
       '<select class="option-select js-outfmt"><option value="png">PNG</option><option value="jpeg">JPEG</option><option value="webp">WebP Lossless</option></select>' +
-      '<button class="btn btn-sm btn-accent js-dli" disabled>Download</button>' +
+      '<button class="btn btn-sm btn-outline-cyan js-dl-txt">Download Text</button>' +
+      '<button class="btn btn-sm btn-accent js-dli" disabled>Download File</button>' +
       '<button class="btn-remove js-rm">✕</button></div>' +
       '</div>' +
       '<div class="row-progress"><div class="row-progress-bar"></div></div>' +
@@ -1386,7 +1489,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       '<div class="row-preview-wrap checker"><canvas id="jcvs-' + id + '"></canvas></div>' +
       '</div>';
 
-    jsonQueue.appendChild(row);
+    getMasterContainer(jsonQueue, batchId).prepend(row);
     row._obj = obj; row._name = name; row._done = false;
 
     const thumbCvs = row.querySelector('#jthumb-' + id + ' canvas');
@@ -1401,7 +1504,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
     if (thumbCvs) setupPreview(thumbCvs);
     if (fullCvs) setupPreview(fullCvs);
 
-    row.querySelector('.js-rm').onclick = () => { removeFileFromDB('decodeFiles', id); row.style.cssText = 'opacity:0;transform:translateY(-6px);transition:all .18s'; setTimeout(() => row.remove(), 180); };
+    row.querySelector('.js-rm').onclick = () => { removeFileFromDB('decodeFiles', parseInt(id)); row.style.cssText = 'opacity:0;transform:translateY(-6px);transition:all .18s'; setTimeout(() => row.remove(), 180); };
     row.querySelector('.js-recon').onclick = () => reconRow(row, id);
     row.querySelector('.js-dli').onclick = () => {
       if (!row._done) return;
@@ -1409,20 +1512,24 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       const mime = fmt === 'jpeg' ? 'image/jpeg' : fmt === 'webp' ? 'image/webp' : 'image/png';
       const ext = fmt === 'jpeg' ? 'jpg' : fmt;
       const cvs = row.querySelector('#jcvs-' + id);
-      cvs.toBlob(b => { if (b) { dlBlob(b, 'pixson-decoded.' + ext); toast('Downloaded!', 'success'); } }, mime, 1.0); // 1.0 = Highest quality
+      cvs.toBlob(b => { if (b) { dlBlob(b, 'pixson-decoded.' + ext); toast('Downloaded File!', 'success'); } }, mime, 1.0); // 1.0 = Highest quality
+    };
+    row.querySelector('.js-dl-txt').onclick = () => {
+      const jStr = JSON.stringify(row._obj, null, 2);
+      dlBlob(new Blob([jStr], { type: 'application/json' }), (name || 'data') + '.json');
+      toast('Downloaded Text payload!', 'success');
     };
     toast('Added: ' + name, 'success', 1800);
   }
 
   // ─── Encrypted Decode Row ────────────────────────────────────
-  function makeEncryptedDecodeRow(id, name, sizeStr, obj) {
+  function makeEncryptedDecodeRow(id, name, sizeStr, obj, uploadTime, batchId) {
     const row = document.createElement('div'); row.className = 'row-card'; row.id = 'jr-' + id;
     row.innerHTML =
       '<div class="row-top">' +
-      '<input type="checkbox" class="js-row-sel" style="width:18px;height:18px;cursor:pointer;accent-color:var(--accent);margin:0 15px 0 5px;">' +
       '<div class="row-thumb" style="display:flex;align-items:center;justify-content:center;font-size:2rem;background:var(--bg-input)">🔒</div>' +
       '<div class="row-info"><div class="row-name" title="' + name + '">' + name + '</div>' +
-      '<div class="row-meta"><span class="badge badge-enc">ENCRYPTED</span><span class="badge badge-size">' + sizeStr + '</span></div></div>' +
+      '<div class="row-meta"><span class="badge badge-enc">ENCRYPTED</span><span class="badge badge-size">' + sizeStr + '</span><span style="color:var(--text-3);font-size:0.75rem;font-weight:500;margin-left:8px">' + getTime(batchId || uploadTime) + '</span></div></div>' +
       '<div class="row-actions"><button class="btn-remove js-rm">✕</button></div>' +
       '</div>' +
       '<div class="row-options" style="border-top:none;padding-top:0">' +
@@ -1430,9 +1537,9 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       '<button class="btn btn-sm btn-primary js-dec">Decrypt</button>' +
       '</div>' +
       '<div class="row-progress"><div class="row-progress-bar"></div></div>';
-    jsonQueue.appendChild(row);
-    row._done = false;
-    row.querySelector('.js-rm').onclick = () => { removeFileFromDB('decodeFiles', id); row.style.cssText = 'opacity:0;transform:translateY(-6px);transition:all .18s'; setTimeout(() => row.remove(), 180); };
+    getMasterContainer(jsonQueue, batchId).prepend(row);
+    row._done = false; row._name = name;
+    row.querySelector('.js-rm').onclick = () => { removeFileFromDB('decodeFiles', parseInt(id)); row.style.cssText = 'opacity:0;transform:translateY(-6px);transition:all .18s'; setTimeout(() => row.remove(), 180); };
     const decBtn = row.querySelector('.js-dec');
     const passInput = row.querySelector('.js-dec-pass');
     passInput.onkeydown = (e) => { if (e.key === 'Enter') decBtn.click(); };
@@ -1445,7 +1552,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
         const decryptedU8 = await decryptData(obj, pass);
         hideProgress(row); toast('Decrypted successfully!', 'success');
         row.remove();
-        await processDataBuffer(decryptedU8, name.replace('.enc.json', ''), id);
+        await processDataBuffer(decryptedU8, name.replace('.enc.json', ''), id, null, uploadTime);
       } catch (err) {
         hideProgress(row); toast(err.message, 'error');
         btn.disabled = false; btn.textContent = 'Decrypt';
@@ -1456,27 +1563,27 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
 
 
   // ─── Generic File Decode Row ─────────────────────────────────
-  function makeGenericDecodeRow(id, name, sizeStr, obj) {
+  function makeGenericDecodeRow(id, name, sizeStr, obj, uploadTime, batchId) {
     const icon = getFileIcon(obj.filename || 'file');
     const row = document.createElement('div'); row.className = 'row-card'; row.id = 'jr-' + id;
     row.innerHTML =
       '<div class="row-top">' +
-      '<input type="checkbox" class="js-row-sel" style="width:18px;height:18px;cursor:pointer;accent-color:var(--accent);margin:0 15px 0 5px;">' +
       '<div class="row-thumb" style="display:flex;align-items:center;justify-content:center;font-size:2rem;background:var(--bg-input)">' + icon + '</div>' +
       '<div class="row-info"><div class="row-name" title="' + (obj.filename || name) + '">' + (obj.filename || name) + '</div>' +
-      '<div class="row-meta"><span class="badge badge-enc">' + (obj.filename || '').split('.').pop().toUpperCase() + '</span><span class="badge badge-size">' + fmtSz(obj.originalSize || 0) + '</span><span class="badge badge-dim">Encoded: ' + sizeStr + '</span></div></div>' +
+      '<div class="row-meta"><span class="badge badge-enc">' + (obj.filename || '').split('.').pop().toUpperCase() + '</span><span class="badge badge-size">' + fmtSz(obj.originalSize || 0) + '</span><span class="badge badge-dim">Encoded: ' + sizeStr + '</span><span style="color:var(--text-3);font-size:0.75rem;font-weight:500;margin-left:8px">' + getTime(batchId || uploadTime) + '</span></div></div>' +
       '<div class="row-actions"><button class="btn btn-sm btn-primary js-recon">Decode</button>' +
-      '<button class="btn btn-sm btn-accent js-dli" disabled>Download</button>' +
+      '<button class="btn btn-sm btn-outline-cyan js-dl-txt">Download Text</button>' +
+      '<button class="btn btn-sm btn-accent js-dli" disabled>Download File</button>' +
       '<button class="btn-remove js-rm">✕</button></div>' +
       '</div>' +
       '<div class="row-progress"><div class="row-progress-bar"></div></div>' +
       '<div class="row-result" id="gres-' + id + '">' +
       '<div class="generic-preview-wrap" id="gprev-' + id + '"></div>' +
       '</div>';
-    jsonQueue.appendChild(row);
-    row._obj = obj; row._done = false;
+    getMasterContainer(jsonQueue, batchId).prepend(row);
+    row._obj = obj; row._done = false; row._name = obj.filename || name;
     row.querySelector('.js-rm').onclick = () => {
-      removeFileFromDB('decodeFiles', id);
+      removeFileFromDB('decodeFiles', parseInt(id));
       if (row._blobUrl) URL.revokeObjectURL(row._blobUrl);
       row.style.cssText = 'opacity:0;transform:translateY(-6px);transition:all .18s';
       setTimeout(() => row.remove(), 180);
@@ -1512,7 +1619,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
         } else if (mime.startsWith('video/')) {
           html = '<video controls src="' + url + '" style="width:100%;max-height:400px;border-radius:6px"></video>';
         } else if (mime.startsWith('image/')) {
-          html = '<img src="' + url + '" style="width:100%;max-height:400px;object-fit:contain;border-radius:6px;background:url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAKUlEQVQYV2N89erVfwY0ICYmJowMMAGQApjxKh2VQZ0wRBgQ42wU1UoAMJk6K+g/M4cAAAAASUVORK5CYII=) repeat;">';
+          html = '<div class="row-preview-wrap checker" style="border-radius:6px;overflow:hidden;display:flex;justify-content:center;padding:10px;"><img src="' + url + '" style="max-width:100%;max-height:400px;object-fit:contain;"></div>';
         } else if (mime === 'application/pdf') {
           html = '<iframe src="' + url + '" style="width:100%;height:500px;border:none;border-radius:6px;background:#fff"></iframe>';
         } else if (mime.startsWith('text/') || mime === 'application/json' || mime === 'application/javascript' || mime === 'text/css') {
@@ -1538,7 +1645,12 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
       reconBtn.style.display = 'none';
       reconBtn.click();
     }
-    row.querySelector('.js-dli').onclick = () => { if (!row._blob) return; dlBlob(row._blob, obj.filename || 'decoded-file'); toast('Downloaded!', 'success'); };
+    row.querySelector('.js-dli').onclick = () => { if (!row._blob) return; dlBlob(row._blob, obj.filename || 'decoded-file'); toast('Downloaded File!', 'success'); };
+    row.querySelector('.js-dl-txt').onclick = () => {
+      const jStr = JSON.stringify(row._obj, null, 2);
+      dlBlob(new Blob([jStr], { type: 'application/json' }), (name || 'data') + '.json');
+      toast('Downloaded Text payload!', 'success');
+    };
     toast('Added: ' + (obj.filename || name), 'success', 1800);
   }
 
@@ -1704,11 +1816,12 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   let currentBatchAction = null;
   let currentBatchIsEncode = true;
 
-  function openBatchModal(action, isEncode) {
+  function openBatchModal(action, isEncode, batchId = null) {
     currentBatchAction = action;
     currentBatchIsEncode = isEncode;
     const queue = isEncode ? imgQueue : jsonQueue;
-    const rows = Array.from(queue.querySelectorAll('.row-card'));
+    const container = batchId ? document.getElementById('batch-' + batchId).querySelector('.master-items') : queue;
+    const rows = Array.from(container.querySelectorAll('.row-card'));
     
     let actionText = '';
     if (action === 'encode') actionText = isEncode ? 'Encode Selected' : 'Decode Selected';
@@ -1775,6 +1888,13 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
         r[`_batchSel_${currentBatchAction}`] = isChecked;
         if (origCb) { origCb.checked = isChecked ? (r[`_batchOrig_${currentBatchAction}`] !== false) : false; origCb.disabled = !isChecked; }
         if (encCb) { encCb.checked = isChecked ? (r[`_batchEnc_${currentBatchAction}`] !== false) : false; encCb.disabled = !isChecked; }
+        
+        const bsa = $('#batchSelectAll');
+        if (bsa) {
+          const total = listEl.querySelectorAll('.batch-file-cb').length;
+          const checked = listEl.querySelectorAll('.batch-file-cb:checked').length;
+          bsa.checked = (total > 0 && total === checked);
+        }
       });
       if (origCb) origCb.addEventListener('change', e => { r[`_batchOrig_${currentBatchAction}`] = e.target.checked; });
       if (encCb) encCb.addEventListener('change', e => { r[`_batchEnc_${currentBatchAction}`] = e.target.checked; });
@@ -2028,7 +2148,7 @@ var qrcode=function(){var t=function(t,r){var e=t,n=g[r],o=null,i=0,a=null,u=[],
   
   window.pixenDecode = async function(payload, w, h) {
     const filtered = await decompressBytes(payload);
-    const rawRGB = unfilter(filtered, w);
+    const rawRGB = reverseFilters(filtered, w, h);
     const rgba = new Uint8ClampedArray(w * h * 4);
     for (let i = 0, j = 0; j < rawRGB.length; i += 4, j += 3) {
       rgba[i] = rawRGB[j]; rgba[i + 1] = rawRGB[j + 1]; rgba[i + 2] = rawRGB[j + 2]; rgba[i + 3] = 255;
